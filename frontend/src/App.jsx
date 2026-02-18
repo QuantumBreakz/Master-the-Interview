@@ -9,6 +9,7 @@ import InterviewPage from './pages/InterviewPage.jsx'
 import DashboardPage from './pages/DashboardPage.jsx'
 import ResultsPage from './pages/ResultsPage.jsx'
 
+import SettingsPage from './pages/SettingsPage.jsx'
 
 function App() {
   return (
@@ -22,6 +23,7 @@ function App() {
           <Route path="/interview" element={<InterviewPage />} />
           <Route path="/interview-session" element={<InterviewSession />} />
           <Route path="/admin/schedule" element={<SessionScheduler />} />
+          <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </Layout>
     </Router>

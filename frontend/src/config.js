@@ -1,7 +1,7 @@
 // Configuration for API endpoints
 const removeTrailingSlash = (url) => url.endsWith('/') ? url.slice(0, -1) : url
 
-const rawBackendUrl = import.meta.env.VITE_AI_BACKEND_URL || 'http://localhost:5000'
+const rawBackendUrl = import.meta.env.VITE_AI_BACKEND_URL || 'http://localhost:3000'
 const cleanBackendUrl = removeTrailingSlash(rawBackendUrl)
 
 // Debug logging for production
