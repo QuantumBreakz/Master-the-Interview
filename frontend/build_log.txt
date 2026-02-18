@@ -1,0 +1,22 @@
+
+> frontend@0.0.0 build
+> vite build
+
+vite v7.1.9 building for production...
+[baseline-browser-mapping] The data in this module is over two months old.  To ensure accurate Baseline data, please update: `npm i baseline-browser-mapping@latest -D`
+transforming...
+✓ 16 modules transformed.
+✗ Build failed in 452ms
+error during build:
+[vite:css] [postcss] /Users/aliahmed/Downloads/AI Interviewer/frontend/src/index.css:73:3: The `animate-gradient` class does not exist. If `animate-gradient` is a custom class, make sure it is defined within a `@layer` directive.
+file: /Users/aliahmed/Downloads/AI Interviewer/frontend/src/index.css:73:2
+    at Input.error (/Users/aliahmed/Downloads/AI Interviewer/frontend/node_modules/vite/node_modules/postcss/lib/input.js:135:16)
+    at AtRule.error (/Users/aliahmed/Downloads/AI Interviewer/frontend/node_modules/vite/node_modules/postcss/lib/node.js:146:32)
+    at processApply (/Users/aliahmed/Downloads/AI Interviewer/frontend/node_modules/tailwindcss/lib/lib/expandApplyAtRules.js:380:29)
+    at /Users/aliahmed/Downloads/AI Interviewer/frontend/node_modules/tailwindcss/lib/lib/expandApplyAtRules.js:538:9
+    at /Users/aliahmed/Downloads/AI Interviewer/frontend/node_modules/tailwindcss/lib/processTailwindFeatures.js:57:50
+    at async plugins (/Users/aliahmed/Downloads/AI Interviewer/frontend/node_modules/tailwindcss/lib/plugin.js:38:17)
+    at async LazyResult.runAsync (/Users/aliahmed/Downloads/AI Interviewer/frontend/node_modules/vite/node_modules/postcss/lib/lazy-result.js:293:11)
+    at async runPostCSS (file:///Users/aliahmed/Downloads/AI%20Interviewer/frontend/node_modules/vite/dist/node/chunks/dep-Chhhsdoe.js:32166:19)
+    at async compilePostCSS (file:///Users/aliahmed/Downloads/AI%20Interviewer/frontend/node_modules/vite/dist/node/chunks/dep-Chhhsdoe.js:32150:6)
+    at async compileCSS (file:///Users/aliahmed/Downloads/AI%20Interviewer/frontend/node_modules/vite/dist/node/chunks/dep-Chhhsdoe.js:32080:26)

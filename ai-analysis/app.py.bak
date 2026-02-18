@@ -1,0 +1,1498 @@
+import streamlit as st
+import joblib
+import numpy as np
+import re
+import requests
+import base64
+import PyPDF2
+import docx
+import io
+import spacy
+import nltk
+import random
+import av
+import cv2
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration
+import time
+from datetime import datetime
+import threading
+from typing import Dict, List, Tuple, Optional, Set, Any
+from dataclasses import dataclass
+from pathlib import Path
+import json
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+# Download required NLTK data
+nltk.download('punkt')
+nltk.download('averaged_perceptron_tagger')
+nltk.download('maxent_ne_chunker')
+nltk.download('words')
+
+# Load spaCy model
+try:
+    nlp = spacy.load('en_core_web_sm')
+except:
+    st.info('Downloading language model for the nlp...')
+    from spacy.cli import download
+    download('en_core_web_sm')
+    nlp = spacy.load('en_core_web_sm')
+
+class VideoTransformer(VideoTransformerBase):
+    """Video transformer for handling webcam feed"""
+    
+    def __init__(self):
+        self.frame_lock = threading.Lock()
+        self.current_frame = None
+        self.start_time = time.time()
+        self.last_activity_check = time.time()
+        self.is_candidate_present = False
+    
+    def transform(self, frame):
+        """Process each frame from the webcam"""
+        img = frame.to_ndarray(format="bgr24")
+        
+        # Face detection using OpenCV
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+        
+        # Update candidate presence status
+        self.is_candidate_present = len(faces) > 0
+        
+        # Draw rectangle around faces
+        for (x, y, w, h) in faces:
+            cv2.rectangle(img, (x, y), (x+w, y+h), (255, 0, 0), 2)
+        
+        # Add timestamp
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cv2.putText(img, timestamp, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        
+        with self.frame_lock:
+            self.current_frame = img.copy()
+        
+        return img
+    
+    def check_candidate_presence(self):
+        """Check if candidate is present in frame"""
+        if time.time() - self.last_activity_check > 5:  # Check every 5 seconds
+            self.last_activity_check = time.time()
+            with self.frame_lock:
+                if not self.is_candidate_present:
+                    st.warning("⚠️ Please stay in frame during the interview!")
+                return self.is_candidate_present
+
+
+@dataclass
+class ModelResult:
+    """Data class for storing model prediction results"""
+    name: str
+    prediction: str
+    confidence: float
+
+@dataclass
+class LineAnalysis:
+    """Data class for storing line-by-line analysis results"""
+    line_number: int
+    content: str
+    prediction: str
+    confidence: float
+    patterns: List[str]
+
+@dataclass
+class FileAnalysisResult:
+    """Data class for storing file analysis results"""
+    file_path: str
+    prediction: str
+    confidence: float
+    line_count: int
+    ai_lines: int
+    human_lines: int
+    model_results: List[ModelResult]
+
+class GitHubRepoAnalyzer:
+    """Class for analyzing GitHub repositories"""
+    
+    @staticmethod
+    def parse_github_url(url: str) -> Tuple[Optional[str], Optional[str]]:
+        """Parse GitHub URL to extract owner and repo name"""
+        patterns = [
+            r'github\.com/([^/]+)/([^/]+?)(?:\.git)?$',
+            r'github\.com/([^/]+)/([^/]+)/tree/',
+            r'github\.com/([^/]+)/([^/]+)/?$'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                return match.group(1), match.group(2).replace('.git', '')
+        
+        return None, None
+    
+    @staticmethod
+    def get_repo_contents(owner: str, repo: str, path: str = "") -> List[Dict]:
+        """Get contents of a GitHub repository"""
+        url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
+        
+        try:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            st.error(f"Error fetching repo contents: {str(e)}")
+            return []
+    
+    @staticmethod
+    def get_all_python_files(owner: str, repo: str, path: str = "") -> List[Dict]:
+        """Recursively get all Python files from repository"""
+        python_files = []
+        contents = GitHubRepoAnalyzer.get_repo_contents(owner, repo, path)
+        
+        if not contents:
+            return python_files
+        
+        for item in contents:
+            if item['type'] == 'file' and item['name'].endswith('.py'):
+                python_files.append(item)
+            elif item['type'] == 'dir':
+                # Recursively get files from subdirectories
+                subdir_files = GitHubRepoAnalyzer.get_all_python_files(owner, repo, item['path'])
+                python_files.extend(subdir_files)
+        
+        return python_files
+    
+    @staticmethod
+    def get_file_content(download_url: str) -> Optional[str]:
+        """Download and decode file content"""
+        try:
+            response = requests.get(download_url, timeout=10)
+            response.raise_for_status()
+            return response.text
+        except Exception as e:
+            st.warning(f"Error downloading file: {str(e)}")
+            return None
+
+class CodeAnalyzer:
+    """Main class for analyzing code with multiple ML models"""
+    
+    def __init__(self):
+        self.models = {}
+        self.vectorizer = None
+        self.label_encoder = None
+        self.load_models()
+    
+    def load_models(self):
+        """Load all required models and encoders"""
+        try:
+            model_files = {
+                'logistic': 'model/logistic.pkl',
+                'random_forest': 'model/randomforest.pkl',
+                'gradient_boost': 'model/gradientboost.pkl',
+                'xgboost': 'model/xgboost.pkl'
+            }
+            
+            for name, path in model_files.items():
+                if Path(path).exists():
+                    self.models[name] = joblib.load(path)
+                else:
+                    st.warning(f"Model {name} not found at {path}")
+            
+            if Path('model/vectorizer.pkl').exists():
+                self.vectorizer = joblib.load('model/vectorizer.pkl')
+            else:
+                st.error("Vectorizer not found!")
+                return
+            
+            if Path('model/labelencoder.pkl').exists():
+                self.label_encoder = joblib.load('model/labelencoder.pkl')
+                
+        except Exception as e:
+            st.error(f"Error loading models: {str(e)}")
+    
+    def predict_with_model(self, X: np.ndarray, model_name: str) -> Optional[ModelResult]:
+        """Make prediction with a specific model"""
+        if model_name not in self.models:
+            return None
+            
+        try:
+            model = self.models[model_name]
+            
+            if model_name == 'xgboost':
+                y_pred = model.predict(X)
+                if self.label_encoder:
+                    prediction = self.label_encoder.inverse_transform(y_pred)[0]
+                else:
+                    prediction = "ai" if y_pred[0] == 0 else "human"
+            else:
+                prediction = model.predict(X)[0]
+            
+            confidence = model.predict_proba(X).max()
+            
+            return ModelResult(
+                name=model_name.replace('_', ' ').title(),
+                prediction=prediction,
+                confidence=confidence
+            )
+            
+        except Exception as e:
+            st.warning(f"Error with {model_name}: {str(e)}")
+            return None
+    
+    def analyze_code(self, code: str) -> Tuple[List[ModelResult], str, float]:
+        """Analyze code with all available models"""
+        if not self.vectorizer:
+            return [], "Error", 0.0
+        
+        X = self.vectorizer.transform([code])
+        results = []
+        
+        for model_name in self.models.keys():
+            result = self.predict_with_model(X, model_name)
+            if result:
+                results.append(result)
+        
+        final_prediction, final_confidence = self.ensemble_vote(results)
+        
+        return results, final_prediction, final_confidence
+    
+    def ensemble_vote(self, results: List[ModelResult]) -> Tuple[str, float]:
+        """Calculate ensemble prediction using weighted voting"""
+        if not results:
+            return "unknown", 0.0
+        
+        ai_votes = [r.confidence for r in results if r.prediction == "ai"]
+        human_votes = [r.confidence for r in results if r.prediction == "human"]
+        
+        ai_score = np.mean(ai_votes) * len(ai_votes) if ai_votes else 0
+        human_score = np.mean(human_votes) * len(human_votes) if human_votes else 0
+        
+        if ai_score > human_score:
+            return "ai", ai_score / len(results)
+        else:
+            return "human", human_score / len(results)
+    
+    def analyze_lines(self, code: str, model_name: str = 'gradient_boost') -> List[LineAnalysis]:
+        """Perform line-by-line analysis"""
+        if model_name not in self.models or not self.vectorizer:
+            return []
+        
+        lines = code.split('\n')
+        line_analyses = []
+        
+        for i, line in enumerate(lines):
+            if line.strip():
+                try:
+                    X_line = self.vectorizer.transform([line])
+                    result = self.predict_with_model(X_line, model_name)
+                    
+                    if result:
+                        patterns = self.detect_patterns(line)
+                        line_analyses.append(LineAnalysis(
+                            line_number=i + 1,
+                            content=line,
+                            prediction=result.prediction,
+                            confidence=result.confidence,
+                            patterns=patterns
+                        ))
+                        
+                except Exception as e:
+                    continue
+        
+        return line_analyses
+    
+    def analyze_file(self, file_path: str, code: str) -> FileAnalysisResult:
+        """Analyze a single file and return results"""
+        results, final_pred, final_conf = self.analyze_code(code)
+        line_analyses = self.analyze_lines(code, 'gradient_boost')
+        
+        ai_lines = sum(1 for a in line_analyses if a.prediction == "ai")
+        human_lines = sum(1 for a in line_analyses if a.prediction == "human")
+        
+        return FileAnalysisResult(
+            file_path=file_path,
+            prediction=final_pred,
+            confidence=final_conf,
+            line_count=len([l for l in code.split('\n') if l.strip()]),
+            ai_lines=ai_lines,
+            human_lines=human_lines,
+            model_results=results
+        )
+    
+    def detect_patterns(self, line: str) -> List[str]:
+        """Detect coding patterns in a line"""
+        patterns = []
+        line = line.strip()
+        
+        pattern_checks = {
+            'function_def': r'^def\s+\w+\s*\(',
+            'class_def': r'^class\s+\w+',
+            'import_statement': r'^(import|from)\s+',
+            'comment': r'^\s*#',
+            'loop': r'^\s*(for|while)\s+',
+            'conditional': r'^\s*if\s+',
+            'print_statement': r'print\s*\(',
+            'input_statement': r'input\s*\(',
+            'list_comprehension': r'\[.*for.*in.*\]',
+            'lambda': r'lambda\s+',
+            'exception_handling': r'^\s*(try|except|finally):',
+            'docstring': r'""".*"""',
+            'f_string': r'f["\'].*\{.*\}.*["\']',
+        }
+        
+        for pattern_name, regex in pattern_checks.items():
+            if re.search(regex, line, re.IGNORECASE):
+                patterns.append(pattern_name.replace('_', ' ').title())
+        
+        return patterns
+
+class SummarizationEngine:
+    """Enhanced summarization engine for code analysis results"""
+    
+    @staticmethod
+    def generate_summary(results: List[ModelResult], final_pred: str, 
+                        line_analyses: List[LineAnalysis]) -> Dict[str, str]:
+        """Generate comprehensive analysis summary"""
+        
+        consensus = SummarizationEngine._analyze_consensus(results, final_pred)
+        patterns = SummarizationEngine._analyze_patterns(line_analyses)
+        distribution = SummarizationEngine._analyze_distribution(line_analyses)
+        reasoning = SummarizationEngine._generate_reasoning(
+            final_pred, consensus, patterns, distribution
+        )
+        
+        return {
+            'consensus': consensus,
+            'patterns': patterns,
+            'distribution': distribution,
+            'reasoning': reasoning
+        }
+    
+    @staticmethod
+    def _analyze_consensus(results: List[ModelResult], final_pred: str) -> str:
+        """Analyze model consensus"""
+        if not results:
+            return "No models available for analysis."
+        
+        ai_count = sum(1 for r in results if r.prediction == "ai")
+        total = len(results)
+        
+        if ai_count == total:
+            return f"All {total} models unanimously predict AI-generated code."
+        elif ai_count == 0:
+            return f"All {total} models unanimously predict human-written code."
+        else:
+            return f"{ai_count}/{total} models predict AI-generated, {total-ai_count}/{total} predict human-written."
+    
+    @staticmethod
+    def _analyze_patterns(line_analyses: List[LineAnalysis]) -> str:
+        """Analyze detected patterns"""
+        if not line_analyses:
+            return "No patterns detected."
+        
+        pattern_counts = {}
+        ai_patterns = {}
+        human_patterns = {}
+        
+        for analysis in line_analyses:
+            for pattern in analysis.patterns:
+                pattern_counts[pattern] = pattern_counts.get(pattern, 0) + 1
+                
+                if analysis.prediction == "ai":
+                    ai_patterns[pattern] = ai_patterns.get(pattern, 0) + 1
+                else:
+                    human_patterns[pattern] = human_patterns.get(pattern, 0) + 1
+        
+        top_patterns = sorted(pattern_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+        
+        if top_patterns:
+            pattern_text = f"Most common patterns: {', '.join([p[0] for p in top_patterns])}. "
+            
+            ai_indicators = [p for p, count in ai_patterns.items() if count > human_patterns.get(p, 0)]
+            human_indicators = [p for p, count in human_patterns.items() if count > ai_patterns.get(p, 0)]
+            
+            if ai_indicators:
+                pattern_text += f"AI-leaning patterns: {', '.join(ai_indicators)}. "
+            if human_indicators:
+                pattern_text += f"Human-leaning patterns: {', '.join(human_indicators)}."
+                
+            return pattern_text
+        
+        return "No significant patterns detected."
+    
+    @staticmethod
+    def _analyze_distribution(line_analyses: List[LineAnalysis]) -> str:
+        """Analyze line prediction distribution"""
+        if not line_analyses:
+            return "No lines analyzed."
+        
+        ai_lines = [a for a in line_analyses if a.prediction == "ai"]
+        human_lines = [a for a in line_analyses if a.prediction == "human"]
+        
+        total = len(line_analyses)
+        ai_count = len(ai_lines)
+        human_count = len(human_lines)
+        
+        ai_pct = (ai_count / total) * 100
+        human_pct = (human_count / total) * 100
+        
+        avg_confidence = np.mean([a.confidence for a in line_analyses])
+        
+        return (f"{ai_count}/{total} lines ({ai_pct:.1f}%) flagged as AI-generated, "
+                f"{human_count}/{total} lines ({human_pct:.1f}%) as human-written. "
+                f"Average confidence: {avg_confidence:.2f}")
+    
+    @staticmethod
+    def _generate_reasoning(final_pred: str, consensus: str, patterns: str, distribution: str) -> str:
+        """Generate final reasoning explanation"""
+        reasoning = []
+        
+        if final_pred == "ai":
+            reasoning.append("🤖 **AI-Generated Code Detected**")
+            reasoning.append("The ensemble analysis suggests this code was likely generated by AI based on:")
+        else:
+            reasoning.append("👨‍💻 **Human-Written Code Detected**")
+            reasoning.append("The ensemble analysis suggests this code was likely written by a human based on:")
+        
+        reasoning.append(f"• **Model Consensus**: {consensus}")
+        reasoning.append(f"• **Pattern Analysis**: {patterns}")
+        reasoning.append(f"• **Line Distribution**: {distribution}")
+        
+        return "\n".join(reasoning)
+    
+    @staticmethod
+    def generate_repo_summary(file_results: List[FileAnalysisResult]) -> Dict:
+        """Generate repository-wide summary"""
+        if not file_results:
+            return {}
+        
+        total_files = len(file_results)
+        ai_files = sum(1 for f in file_results if f.prediction == "ai")
+        human_files = total_files - ai_files
+        
+        avg_confidence = np.mean([f.confidence for f in file_results])
+        total_lines = sum(f.line_count for f in file_results)
+        total_ai_lines = sum(f.ai_lines for f in file_results)
+        total_human_lines = sum(f.human_lines for f in file_results)
+        
+        return {
+            'total_files': total_files,
+            'ai_files': ai_files,
+            'human_files': human_files,
+            'ai_percentage': (ai_files / total_files) * 100,
+            'human_percentage': (human_files / total_files) * 100,
+            'avg_confidence': avg_confidence,
+            'total_lines': total_lines,
+            'total_ai_lines': total_ai_lines,
+            'total_human_lines': total_human_lines
+        }
+
+def render_single_code_analysis():
+    """Render the single code analysis interface"""
+    st.markdown("## 📝 Analyze Single Code")
+    
+    if 'analyzer' not in st.session_state:
+        with st.spinner("Loading models..."):
+            st.session_state.analyzer = CodeAnalyzer()
+    
+    analyzer = st.session_state.analyzer
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        code_input = st.text_area(
+            "📝 Enter your Python code here:",
+            height=400,
+            placeholder="# Paste your Python code here...\nprint('Hello, World!')"
+        )
+    
+    with col2:
+        st.markdown("### ⚙️ Analysis Options")
+        
+        line_model = st.selectbox(
+            "Model for line analysis:",
+            ["gradient_boost", "random_forest", "logistic", "xgboost"],
+            help="Choose which model to use for line-by-line analysis"
+        )
+        
+        show_confidence = st.checkbox("Show confidence scores", value=True)
+        show_patterns = st.checkbox("Show detected patterns", value=True)
+    
+    if st.button("🔍 Analyze Code", type="primary", use_container_width=True):
+        if not code_input.strip():
+            st.warning("⚠️ Please enter some code to analyze.")
+            return
+        
+        with st.spinner("Analyzing code..."):
+            results, final_pred, final_conf = analyzer.analyze_code(code_input)
+            
+            if not results:
+                st.error("❌ Analysis failed. Please check if models are loaded correctly.")
+                return
+            
+            line_analyses = analyzer.analyze_lines(code_input, line_model)
+            summary = SummarizationEngine.generate_summary(results, final_pred, line_analyses)
+        
+        display_single_analysis_results(results, final_pred, final_conf, line_analyses, 
+                                       summary, show_confidence, show_patterns)
+
+def render_github_repo_analysis():
+    """Render the GitHub repository analysis interface"""
+    st.markdown("## 🔗 Analyze GitHub Repository")
+    
+    if 'analyzer' not in st.session_state:
+        with st.spinner("Loading models..."):
+            st.session_state.analyzer = CodeAnalyzer()
+    
+    analyzer = st.session_state.analyzer
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        repo_url = st.text_input(
+            "🔗 Enter GitHub Repository URL:",
+            placeholder="https://github.com/username/repository",
+            help="Enter the full GitHub repository URL"
+        )
+    
+    with col2:
+        max_files = st.number_input(
+            "Max files to analyze:",
+            min_value=1,
+            max_value=100,
+            value=20,
+            help="Limit the number of files to analyze"
+        )
+    
+    if st.button("🔍 Analyze Repository", type="primary", use_container_width=True):
+        if not repo_url.strip():
+            st.warning("⚠️ Please enter a GitHub repository URL.")
+            return
+        
+        owner, repo = GitHubRepoAnalyzer.parse_github_url(repo_url)
+        
+        if not owner or not repo:
+            st.error("❌ Invalid GitHub URL. Please use format: https://github.com/owner/repo")
+            return
+        
+        with st.spinner(f"Fetching files from {owner}/{repo}..."):
+            python_files = GitHubRepoAnalyzer.get_all_python_files(owner, repo)
+        
+        if not python_files:
+            st.warning("⚠️ No Python files found in the repository.")
+            return
+        
+        st.info(f"📂 Found {len(python_files)} Python files. Analyzing up to {max_files} files...")
+        
+        file_results = []
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        files_to_analyze = python_files[:max_files]
+        
+        for idx, file_info in enumerate(files_to_analyze):
+            status_text.text(f"Analyzing: {file_info['path']} ({idx + 1}/{len(files_to_analyze)})")
+            
+            code = GitHubRepoAnalyzer.get_file_content(file_info['download_url'])
+            
+            if code:
+                try:
+                    result = analyzer.analyze_file(file_info['path'], code)
+                    file_results.append(result)
+                except Exception as e:
+                    st.warning(f"Error analyzing {file_info['path']}: {str(e)}")
+            
+            progress_bar.progress((idx + 1) / len(files_to_analyze))
+        
+        status_text.empty()
+        progress_bar.empty()
+        
+        if file_results:
+            display_repo_analysis_results(file_results, owner, repo)
+        else:
+            st.error("❌ Failed to analyze any files from the repository.")
+
+def display_single_analysis_results(results, final_pred, final_conf, line_analyses, 
+                                   summary, show_confidence, show_patterns):
+    """Display results for single code analysis"""
+    st.markdown("## 📊 Analysis Results")
+    
+    col1, col2, col3 = st.columns([1, 1, 1])
+    
+    with col1:
+        if final_pred == "ai":
+            st.error(f"🤖 **AI-Generated**")
+            st.metric("Confidence", f"{final_conf:.1%}")
+        else:
+            st.success(f"👨‍💻 **Human-Written**")
+            st.metric("Confidence", f"{final_conf:.1%}")
+    
+    with col2:
+        ai_count = sum(1 for r in results if r.prediction == "ai")
+        st.metric("Models Voting AI", f"{ai_count}/{len(results)}")
+    
+    with col3:
+        avg_conf = np.mean([r.confidence for r in results])
+        st.metric("Average Confidence", f"{avg_conf:.1%}")
+    
+    st.markdown("### 🔬 Individual Model Predictions")
+    
+    for result in results:
+        col1, col2, col3 = st.columns([2, 1, 1])
+        
+        with col1:
+            st.write(f"**{result.name}**")
+        
+        with col2:
+            if result.prediction == "ai":
+                st.write("🤖 AI-Generated")
+            else:
+                st.write("👨‍💻 Human-Written")
+        
+        with col3:
+            if show_confidence:
+                st.write(f"{result.confidence:.1%}")
+    
+    st.markdown("### 🧠 Analysis Summary")
+    st.markdown(summary['reasoning'])
+    
+    with st.expander("📈 Detailed Statistics"):
+        st.write("**Consensus Analysis:**", summary['consensus'])
+        st.write("**Pattern Analysis:**", summary['patterns'])
+        st.write("**Distribution Analysis:**", summary['distribution'])
+
+def display_repo_analysis_results(file_results: List[FileAnalysisResult], owner: str, repo: str):
+    """Display results for repository analysis"""
+    st.markdown("## 📊 Repository Analysis Results")
+    st.markdown(f"### Repository: `{owner}/{repo}`")
+    
+    repo_summary = SummarizationEngine.generate_repo_summary(file_results)
+    
+    # Overall statistics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Total Files", repo_summary['total_files'])
+    
+    with col2:
+        st.metric("AI-Generated", f"{repo_summary['ai_files']} ({repo_summary['ai_percentage']:.1f}%)")
+    
+    with col3:
+        st.metric("Human-Written", f"{repo_summary['human_files']} ({repo_summary['human_percentage']:.1f}%)")
+    
+    with col4:
+        st.metric("Avg Confidence", f"{repo_summary['avg_confidence']:.1%}")
+    
+    # Visualization
+    st.markdown("### 📈 Distribution Overview")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### Files by Prediction")
+        chart_data = {
+            'AI-Generated': repo_summary['ai_files'],
+            'Human-Written': repo_summary['human_files']
+        }
+        st.bar_chart(chart_data)
+    
+    with col2:
+        st.markdown("#### Lines by Prediction")
+        line_data = {
+            'AI Lines': repo_summary['total_ai_lines'],
+            'Human Lines': repo_summary['total_human_lines']
+        }
+        st.bar_chart(line_data)
+    
+    # Detailed file results
+    st.markdown("### 📁 Detailed File Analysis")
+    
+    # Sort by confidence
+    sorted_files = sorted(file_results, key=lambda x: x.confidence, reverse=True)
+    
+    for file_result in sorted_files:
+        with st.expander(f"{'🤖' if file_result.prediction == 'ai' else '👨‍💻'} {file_result.file_path} - {file_result.prediction.upper()} ({file_result.confidence:.1%})"):
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("Confidence", f"{file_result.confidence:.1%}")
+            
+            with col2:
+                st.metric("Total Lines", file_result.line_count)
+            
+            with col3:
+                ai_line_pct = (file_result.ai_lines / (file_result.ai_lines + file_result.human_lines) * 100) if (file_result.ai_lines + file_result.human_lines) > 0 else 0
+                st.metric("AI Lines", f"{file_result.ai_lines} ({ai_line_pct:.1f}%)")
+            
+            st.markdown("**Model Predictions:**")
+            for model_result in file_result.model_results:
+                st.write(f"- {model_result.name}: {model_result.prediction.upper()} ({model_result.confidence:.1%})")
+
+class VideoTransformer(VideoTransformerBase):
+    """Video transformer for handling webcam feed"""
+    
+    def __init__(self):
+        self.frame_lock = threading.Lock()
+        self.current_frame = None
+        self.start_time = time.time()
+        self.last_activity_check = time.time()
+        self.is_candidate_present = False
+        self.face_count = 0
+    
+    def transform(self, frame):
+        """Process each frame from the webcam"""
+        img = frame.to_ndarray(format="bgr24")
+        
+        # Face detection using OpenCV
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+        
+        # Update face counts
+        self.face_count = len(faces)
+        self.is_candidate_present = self.face_count > 0
+        
+        # Draw rectangle around faces and add warning if multiple faces detected
+        for (x, y, w, h) in faces:
+            cv2.rectangle(img, (x, y), (x+w, y+h), (255, 0, 0), 2)
+            
+        if self.face_count > 1:
+            cv2.putText(img, "Multiple faces detected!", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        
+        # Add timestamp
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cv2.putText(img, timestamp, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        
+        with self.frame_lock:
+            self.current_frame = img.copy()
+        
+        return img
+    
+    def check_candidate_presence(self):
+        """Check if candidate is present in frame"""
+        if time.time() - self.last_activity_check > 5:  # Check every 5 seconds
+            self.last_activity_check = time.time()
+            with self.frame_lock:
+                if not self.is_candidate_present:
+                    st.warning("⚠️ Please stay in frame during the interview!")
+                return self.is_candidate_present
+    
+    def detect_multiple_faces(self):
+        """Check if multiple faces are detected"""
+        with self.frame_lock:
+            return self.face_count > 1
+        'javascript': {
+            'keywords': ['javascript', 'nodejs', 'react', 'angular', 'vue', 'express', 'typescript'],
+            'libraries': ['jquery', 'lodash', 'axios', 'moment', 'redux', 'mobx'],
+            'frameworks': ['react', 'angular', 'vue', 'next.js', 'nuxt', 'express'],
+            'concepts': ['closures', 'promises', 'async/await', 'event loop', 'dom manipulation']
+        },
+        'java': {
+            'keywords': ['java', 'spring', 'hibernate', 'junit', 'maven', 'gradle'],
+            'libraries': ['log4j', 'junit', 'mockito', 'jackson', 'gson'],
+            'frameworks': ['spring', 'hibernate', 'struts', 'jakarta ee'],
+            'concepts': ['threads', 'collections', 'streams', 'reflection']
+        },
+        'database': {
+            'keywords': ['sql', 'mysql', 'postgresql', 'mongodb', 'oracle', 'redis'],
+            'concepts': ['normalization', 'indexing', 'transactions', 'acid', 'sharding'],
+            'tools': ['orm', 'migrations', 'replication', 'backup/restore']
+        },
+        'devops': {
+            'keywords': ['docker', 'kubernetes', 'jenkins', 'aws', 'azure', 'gcp', 'ci/cd'],
+            'tools': ['git', 'jenkins', 'travis', 'ansible', 'terraform'],
+            'concepts': ['containerization', 'orchestration', 'infrastructure as code', 'monitoring']
+        }
+    }
+    
+    DIFFICULTY_LEVELS = {
+        'beginner': {
+            'max_years': 2,
+            'keywords': ['basic', 'simple', 'fundamental', 'entry-level', 'started'],
+            'question_types': ['syntax', 'basic concepts', 'simple algorithms']
+        },
+        'intermediate': {
+            'max_years': 5,
+            'keywords': ['developed', 'implemented', 'designed', 'managed'],
+            'question_types': ['design patterns', 'optimization', 'error handling']
+        },
+        'expert': {
+            'max_years': float('inf'),
+            'keywords': ['architected', 'led', 'optimized', 'scaled', 'mentored'],
+            'question_types': ['system design', 'advanced algorithms', 'performance']
+        }
+    }
+    
+    def __init__(self):
+        self.extracted_skills = set()
+    
+    def extract_text_from_pdf(self, pdf_file) -> str:
+        """Extract text content from uploaded PDF file"""
+        try:
+            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            text = ""
+            for page in pdf_reader.pages:
+                text += page.extract_text() + "\n"
+            return text
+        except Exception as e:
+            st.error(f"Error extracting text from PDF: {str(e)}")
+            return ""
+    
+    def extract_text_from_docx(self, docx_file) -> str:
+        """Extract text content from uploaded DOCX file"""
+        try:
+            doc = docx.Document(docx_file)
+            text = ""
+            for paragraph in doc.paragraphs:
+                text += paragraph.text + "\n"
+            return text
+        except Exception as e:
+            st.error(f"Error extracting text from DOCX: {str(e)}")
+            return ""
+    
+    def extract_skills(self, text: str) -> List[Skill]:
+        """Extract and analyze programming skills from text using NLP and ML"""
+        text = text.lower()
+        doc = nlp(text)
+        skills = []
+        
+        # Initialize TF-IDF vectorizer for context analysis
+        vectorizer = TfidfVectorizer(stop_words='english')
+        
+        # Extract sentences containing skill mentions for context analysis
+        skill_contexts = {}
+        sentences = [sent.text.lower() for sent in doc.sents]
+        
+        for category, skill_info in self.PROGRAMMING_SKILLS.items():
+            # Combine all keywords for initial detection
+            all_keywords = (
+                skill_info['keywords'] +
+                skill_info.get('libraries', []) +
+                skill_info.get('frameworks', []) +
+                skill_info.get('concepts', []) +
+                skill_info.get('tools', [])
+            )
+            
+            for skill_keyword in all_keywords:
+                # Find sentences containing skill mentions
+                relevant_sentences = [
+                    sent for sent in sentences
+                    if skill_keyword in sent
+                ]
+                
+                if relevant_sentences:
+                    # Calculate skill proficiency based on context
+                    proficiency = self._determine_proficiency(relevant_sentences)
+                    years_exp = self._estimate_experience(relevant_sentences)
+                    last_used = self._determine_recency(relevant_sentences)
+                    
+                    # Get contexts where the skill was used
+                    contexts = self._extract_contexts(relevant_sentences)
+                    
+                    skill = Skill(
+                        name=skill_keyword,
+                        category=category,
+                        proficiency=proficiency,
+                        years_experience=years_exp,
+                        last_used=last_used,
+                        contexts=contexts
+                    )
+                    
+                    skills.append(skill)
+        
+        # Sort skills by years of experience and recency
+        skills.sort(key=lambda x: (x.years_experience, x.last_used == 'recent'), reverse=True)
+        return skills
+    
+    def _determine_proficiency(self, sentences: List[str]) -> str:
+        """Determine skill proficiency level based on context"""
+        text = ' '.join(sentences).lower()
+        
+        # Check keywords in each difficulty level
+        scores = {level: 0 for level in self.DIFFICULTY_LEVELS.keys()}
+        
+        for level, info in self.DIFFICULTY_LEVELS.items():
+            for keyword in info['keywords']:
+                if keyword in text:
+                    scores[level] += 1
+        
+        # Return the level with highest score, default to beginner
+        return max(scores.items(), key=lambda x: x[1])[0] if any(scores.values()) else 'beginner'
+    
+    def _estimate_experience(self, sentences: List[str]) -> float:
+        """Estimate years of experience with a skill"""
+        text = ' '.join(sentences).lower()
+        
+        # Look for year patterns
+        year_patterns = [
+            r'(\d+)[\+]?\s*(?:year|yr)s?',
+            r'(?:since|from)\s+(?:19|20)\d{2}',
+        ]
+        
+        years = []
+        for pattern in year_patterns:
+            matches = re.finditer(pattern, text)
+            for match in matches:
+                if 'since' in match.group() or 'from' in match.group():
+                    year = int(re.search(r'(?:19|20)\d{2}', match.group()).group())
+                    years.append(2025 - year)  # Calculate years from mentioned year
+                else:
+                    years.append(float(re.search(r'\d+', match.group()).group()))
+        
+        return max(years) if years else 1.0
+    
+    def _determine_recency(self, sentences: List[str]) -> str:
+        """Determine how recently a skill was used"""
+        text = ' '.join(sentences).lower()
+        
+        recent_indicators = ['current', 'present', 'ongoing', 'now', 'recently']
+        moderate_indicators = ['last year', 'previous', 'formerly']
+        
+        if any(indicator in text for indicator in recent_indicators):
+            return 'recent'
+        elif any(indicator in text for indicator in moderate_indicators):
+            return 'moderate'
+        else:
+            return 'old'
+    
+    def _extract_contexts(self, sentences: List[str]) -> List[str]:
+        """Extract contexts where the skill was used"""
+        contexts = []
+        project_indicators = ['project', 'developed', 'implemented', 'created', 'built']
+        
+        for sent in sentences:
+            doc = nlp(sent)
+            
+            # Look for project names or descriptions
+            for chunk in doc.noun_chunks:
+                if any(indicator in chunk.root.head.text.lower() for indicator in project_indicators):
+                    contexts.append(chunk.text)
+        
+        return list(set(contexts))
+    
+    def generate_questions(self, skills: List[Skill], num_questions: int = 3) -> List[Dict]:
+        """Generate personalized coding questions based on extracted skills and proficiency"""
+        questions = []
+        
+        # Advanced question templates with difficulty mapping
+        templates = {
+            'python': {
+                'beginner': [
+                    {
+                        'title': 'Basic Data Structures',
+                        'description': 'Write a Python function to find all pairs of elements in a list whose sum equals a given target. Use appropriate data structures for optimal performance.',
+                        'difficulty': 'Easy',
+                        'concepts': ['lists', 'dictionaries', 'time complexity']
+                    },
+                    {
+                        'title': 'String Manipulation',
+                        'description': 'Create a function that validates a string as a palindrome, considering only alphanumeric characters and ignoring case.',
+                        'difficulty': 'Easy',
+                        'concepts': ['strings', 'loops', 'conditionals']
+                    }
+                ],
+                'intermediate': [
+                    {
+                        'title': 'Advanced Collections',
+                        'description': 'Implement a custom cache decorator with LRU (Least Recently Used) strategy. The decorator should accept cache size as a parameter.',
+                        'difficulty': 'Medium',
+                        'concepts': ['decorators', 'OOP', 'collections']
+                    },
+                    {
+                        'title': 'Concurrent Programming',
+                        'description': 'Create a producer-consumer system using Python\'s threading module. Include proper synchronization mechanisms.',
+                        'difficulty': 'Medium',
+                        'concepts': ['threading', 'queues', 'synchronization']
+                    }
+                ],
+                'expert': [
+                    {
+                        'title': 'System Design',
+                        'description': 'Design and implement a rate limiter class that can be used as a decorator for API endpoints. Support multiple algorithms (token bucket, leaky bucket).',
+                        'difficulty': 'Hard',
+                        'concepts': ['design patterns', 'algorithms', 'concurrency']
+                    },
+                    {
+                        'title': 'Performance Optimization',
+                        'description': 'Implement a high-performance in-memory cache system with support for TTL, capacity limits, and eviction policies.',
+                        'difficulty': 'Hard',
+                        'concepts': ['algorithms', 'memory management', 'performance']
+                    }
+                ]
+            },
+                'javascript': {
+                    'beginner': [
+                        {
+                            'title': 'DOM Manipulation',
+                            'description': 'Create a simple todo list application with add, remove, and toggle completion functionality using vanilla JavaScript.',
+                            'difficulty': 'Easy',
+                            'concepts': ['DOM', 'events', 'localStorage']
+                        },
+                        {
+                            'title': 'Array Methods',
+                            'description': 'Implement a function that processes an array of objects using map, filter, and reduce to transform and analyze data.',
+                            'difficulty': 'Easy',
+                            'concepts': ['arrays', 'functional programming']
+                        }
+                    ],
+                    'intermediate': [
+                        {
+                            'title': 'Async Programming',
+                            'description': 'Create a Promise-based API wrapper with request queuing, retry logic, and rate limiting.',
+                            'difficulty': 'Medium',
+                            'concepts': ['promises', 'async/await', 'error handling']
+                        },
+                        {
+                            'title': 'State Management',
+                            'description': 'Implement a simple state management solution using the Observable pattern without external libraries.',
+                            'difficulty': 'Medium',
+                            'concepts': ['design patterns', 'reactivity', 'events']
+                        }
+                    ],
+                    'expert': [
+                        {
+                            'title': 'Framework Implementation',
+                            'description': 'Create a lightweight framework implementing virtual DOM and component-based architecture.',
+                            'difficulty': 'Hard',
+                            'concepts': ['virtual DOM', 'components', 'rendering']
+                        },
+                        {
+                            'title': 'Performance Optimization',
+                            'description': 'Implement a JavaScript module bundler with code splitting and lazy loading capabilities.',
+                            'difficulty': 'Hard',
+                            'concepts': ['bundling', 'optimization', 'modules']
+                        }
+                    ]
+                },
+                'database': {
+                    'beginner': [
+                        {
+                            'title': 'Basic Queries',
+                            'description': 'Write SQL queries to analyze sales data, including filtering, grouping, and basic joins.',
+                            'difficulty': 'Easy',
+                            'concepts': ['SELECT', 'WHERE', 'GROUP BY', 'JOIN']
+                        }
+                    ],
+                    'intermediate': [
+                        {
+                            'title': 'Database Design',
+                            'description': 'Design a normalized database schema for a social media platform. Include tables for users, posts, comments, and relationships.',
+                            'difficulty': 'Medium',
+                            'concepts': ['normalization', 'relationships', 'indexing']
+                        }
+                    ],
+                    'expert': [
+                        {
+                            'title': 'Performance Optimization',
+                            'description': 'Analyze and optimize a set of slow-performing queries using execution plans and appropriate indexes.',
+                            'difficulty': 'Hard',
+                            'concepts': ['query optimization', 'indexing', 'execution plans']
+                        }
+                    ]
+                },
+                'devops': {
+                    'beginner': [
+                        {
+                            'title': 'Container Basics',
+                            'description': 'Create a Dockerfile for a Python web application with proper layering and optimization.',
+                            'difficulty': 'Easy',
+                            'concepts': ['Docker', 'containers', 'images']
+                        }
+                    ],
+                    'intermediate': [
+                        {
+                            'title': 'CI/CD Pipeline',
+                            'description': 'Set up a complete CI/CD pipeline for a microservices application using GitHub Actions.',
+                            'difficulty': 'Medium',
+                            'concepts': ['CI/CD', 'automation', 'testing']
+                        }
+                    ],
+                    'expert': [
+                        {
+                            'title': 'Infrastructure Design',
+                            'description': 'Design and implement a scalable Kubernetes cluster with proper monitoring, logging, and auto-scaling.',
+                            'difficulty': 'Hard',
+                            'concepts': ['Kubernetes', 'scalability', 'monitoring']
+                        }
+                    ]
+                }
+            }
+        
+        # Select questions based on skill proficiency and categories
+        selected_questions = []
+        skills_by_category = {}
+        
+        # Group skills by category
+        for skill in skills:
+            if skill.category not in skills_by_category:
+                skills_by_category[skill.category] = []
+            skills_by_category[skill.category].append(skill)
+        
+        # Select questions for each category
+        for category, category_skills in skills_by_category.items():
+            if category in templates:
+                # Get the highest proficiency level in this category
+                max_proficiency = max(skill.proficiency for skill in category_skills)
+                
+                # Select questions from appropriate difficulty levels
+                category_templates = templates[category]
+                if max_proficiency in category_templates:
+                    # Add some questions from the current level
+                    selected_questions.extend(category_templates[max_proficiency])
+                    
+                    # Maybe add some harder questions if available
+                    if max_proficiency == 'beginner' and 'intermediate' in category_templates:
+                        selected_questions.append(random.choice(category_templates['intermediate']))
+                    elif max_proficiency == 'intermediate' and 'expert' in category_templates:
+                        selected_questions.append(random.choice(category_templates['expert']))
+        
+        # If no specific questions found, add general programming questions
+        if not selected_questions:
+            selected_questions = [
+                {
+                    'title': 'Algorithm Implementation',
+                    'description': 'Implement an efficient algorithm to find the nth Fibonacci number with optimal space complexity.',
+                    'difficulty': 'Medium',
+                    'concepts': ['algorithms', 'optimization', 'recursion']
+                },
+                {
+                    'title': 'Data Structure',
+                    'description': 'Implement a generic Stack data structure with push, pop, and getMin operations in O(1) time.',
+                    'difficulty': 'Medium',
+                    'concepts': ['data structures', 'time complexity', 'OOP']
+                }
+            ]
+        
+        # Randomize and select required number of questions
+        random.shuffle(selected_questions)
+        
+        # Return unique questions up to num_questions
+        seen = set()
+        unique_questions = []
+        for q in selected_questions:
+            if len(unique_questions) >= num_questions:
+                break
+            q_hash = (q['title'], q['description'])
+            if q_hash not in seen:
+                seen.add(q_hash)
+                unique_questions.append(q)
+        
+        return unique_questions[:num_questions]
+
+
+def render_coding_interview():
+    """Render the coding interview section."""
+    
+    st.markdown("### 💻 AI-Powered Coding Interview")
+    
+    # Initialize session state for interview stages
+    if 'interview_stage' not in st.session_state:
+        st.session_state.interview_stage = 'initial'
+    
+    # WebRTC configuration with multiple STUN servers
+    RTC_CONFIGURATION = RTCConfiguration(
+        {
+            "iceServers": [
+                {"urls": ["stun:stun.l.google.com:19302"]},
+                {"urls": ["stun:stun1.l.google.com:19302"]},
+                {"urls": ["stun:stun2.l.google.com:19302"]},
+                {"urls": ["stun:stun3.l.google.com:19302"]},
+                {"urls": ["stun:stun4.l.google.com:19302"]}
+            ],
+            "iceTransportPolicy": "all",
+            "bundlePolicy": "max-bundle",
+            "iceCandidatePoolSize": 1
+        }
+    )
+    
+    if st.session_state.interview_stage == 'initial':
+        st.markdown("#### 🎯 Before we begin:")
+        st.markdown("1. Make sure you have a working camera and microphone")
+        st.markdown("2. Ensure you are in a well-lit environment")
+        st.markdown("3. Position yourself clearly in front of the camera")
+        
+        if st.button("Start Interview"):
+            st.session_state.interview_stage = 'setup'
+            st.rerun()
+            
+    elif st.session_state.interview_stage == 'setup':
+        st.markdown("### 📸 Camera Check")
+        
+        video_transformer = VideoTransformer()
+        webrtc_ctx = webrtc_streamer(
+            key="setup-check",
+            rtc_configuration=RTC_CONFIGURATION,
+            video_processor_factory=lambda: video_transformer,
+            async_processing=True,
+            media_stream_constraints={
+                "video": {"frameRate": {"ideal": 30}},
+                "audio": True
+            },
+            video_html_attrs={
+                "style": {"width": "100%", "height": "auto"},
+                "controls": False,
+                "autoPlay": True,
+                "playsInline": True,
+            }
+        )
+        
+        if webrtc_ctx.video_transformer and webrtc_ctx.video_transformer.is_candidate_present:
+            st.success("✅ Camera working and face detected!")
+            st.markdown("🎤 **Audio Status:** Active")
+            if st.button("Continue to Interview"):
+                st.session_state.interview_stage = 'interview'
+                st.rerun()
+        else:
+            st.error("❌ Please make sure you are visible in the camera")
+            
+    elif st.session_state.interview_stage == 'interview':
+        # Create two columns for video and coding interface
+        video_col, code_col = st.columns([1, 2])
+        
+        with video_col:
+            st.markdown("### � Interview Monitor")
+            # WebRTC configuration
+            RTC_CONFIGURATION = RTCConfiguration(
+                {
+                    "iceServers": [
+                        {"urls": ["stun:stun.l.google.com:19302"]},
+                        {"urls": ["stun:stun1.l.google.com:19302"]},
+                        {"urls": ["stun:stun2.l.google.com:19302"]},
+                        {"urls": ["stun:stun3.l.google.com:19302"]},
+                        {"urls": ["stun:stun4.l.google.com:19302"]}
+                    ],
+                    "iceTransportPolicy": "all",
+                    "bundlePolicy": "max-bundle",
+                    "iceCandidatePoolSize": 1
+                }
+            )
+            
+            video_transformer = VideoTransformer()
+            webrtc_ctx = webrtc_streamer(
+                key="interview-monitor",
+                rtc_configuration=RTC_CONFIGURATION,
+                video_processor_factory=lambda: video_transformer,
+                async_processing=True,
+                media_stream_constraints={
+                    "video": {"frameRate": {"ideal": 30}},
+                    "audio": True
+                },
+                video_html_attrs={
+                    "style": {"width": "100%", "height": "auto"},
+                    "controls": False,
+                    "autoPlay": True,
+                    "playsInline": True,
+                }
+            )
+            
+            if webrtc_ctx.video_transformer:
+                if not webrtc_ctx.video_transformer.check_candidate_presence():
+                    st.error("⚠️ Please remain visible during the interview!")
+                elif webrtc_ctx.video_transformer.detect_multiple_faces():
+                    st.error("⚠️ Multiple people detected! Please ensure only you are visible in the camera.")
+            
+            st.markdown("🎤 **Audio Status:** Active")
+        
+        with code_col:
+            st.markdown("### ⌨️ Coding Challenge")
+            if 'current_question' not in st.session_state:
+                questions = [
+                    {
+                        'title': 'Concurrent Programming',
+                        'difficulty': 'Medium',
+                        'description': 'Create a producer-consumer system using Python\'s threading module. Include proper synchronization mechanisms.'
+                    },
+                    # Add more questions here
+                ]
+                st.session_state.current_question = random.choice(questions)
+            
+            st.markdown(f"**{st.session_state.current_question['title']}**")
+            st.markdown(f"*Difficulty: {st.session_state.current_question['difficulty']}*")
+            st.markdown(st.session_state.current_question['description'])
+            
+            code = st.text_area("Write your code here:", height=300)
+            
+            submitted = st.button("Submit Solution")
+            if submitted:
+                if not code.strip():
+                    st.warning("⚠️ Please write some code before submitting.")
+                    return
+                
+                # Check if candidate is visible
+                if webrtc_ctx.video_transformer:
+                    if not webrtc_ctx.video_transformer.is_candidate_present:
+                        st.error("⚠️ Please ensure you are visible in the camera before submitting!")
+                        return
+                    if webrtc_ctx.video_transformer.detect_multiple_faces():
+                        st.error("⚠️ Multiple people detected! This may be considered as cheating.")
+                        # Generate AI explanation of why the code might be suspicious
+                        st.warning("🤖 AI Analysis: Potential collaboration detected. This code submission may be reviewed for academic integrity.")
+                        return
+                
+                # Store the submitted code in session state for analysis
+                st.session_state.submitted_code = code
+                # TODO: Analyze the submitted code
+                st.success("Code submitted successfully! Our AI is analyzing your solution...")
+
+                    webrtc_ctx = webrtc_streamer(
+                        key="interview-monitor",
+                        rtc_configuration=RTC_CONFIGURATION,
+                        video_processor_factory=lambda: video_transformer,
+                        async_processing=True,
+                        media_stream_constraints=media_constraints,
+                        video_html_attrs={
+                            "style": {"width": "100%", "height": "auto"},
+                            "controls": False,
+                            "autoPlay": True,
+                            "playsInline": True,
+                        }
+                    )
+                    
+                    if webrtc_ctx.video_transformer:
+                        # Periodically check candidate presence
+                        if not webrtc_ctx.video_transformer.check_candidate_presence():
+                            st.error("⚠️ Please remain visible during the interview!")
+                    
+                    # Audio indicator
+                    st.markdown("🎤 **Audio Status:** Active")
+                
+                with code_col:
+                    st.markdown(f"**{st.session_state.current_question['title']}**")
+                    st.markdown(f"*Difficulty: {st.session_state.current_question['difficulty']}*")
+                    st.markdown(st.session_state.current_question['description'])
+                    
+                    code = st.text_area("Write your code here:", height=300)
+                    
+                    submitted = st.button("Submit Solution")
+                    if submitted:
+                        if not code.strip():
+                            st.warning("⚠️ Please write some code before submitting.")
+                            return
+                        
+                        # Check if candidate is visible
+                        if webrtc_ctx.video_transformer and not webrtc_ctx.video_transformer.is_candidate_present:
+                            st.error("⚠️ Please ensure you are visible in the camera before submitting!")
+                            return
+                        
+                        # Store the submitted code in session state for analysis
+                        st.session_state.submitted_code = code
+            # Initialize analyzer if not already done
+            if 'analyzer' not in st.session_state:
+                st.session_state.analyzer = CodeAnalyzer()
+            
+            code_analyzer = st.session_state.analyzer
+            
+            # Only show code analysis results if code has been submitted
+            if hasattr(st.session_state, 'submitted_code') and st.session_state.submitted_code:
+                code = st.session_state.submitted_code
+                if code.strip():
+                    results, final_pred, final_conf = code_analyzer.analyze_code(code)
+                    line_analyses = code_analyzer.analyze_lines(code)
+                    summary = SummarizationEngine.generate_summary(results, final_pred, line_analyses)
+                    
+                    st.markdown("### 🔍 Code Analysis Results")
+                    st.markdown(summary['reasoning'])
+
+class VideoTransformer(VideoTransformerBase):
+    def __init__(self):
+        # Load the face cascade classifier
+        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        self.face_cascade = cv2.CascadeClassifier(cascade_path)
+        if self.face_cascade.empty():
+            raise ValueError(f"Error: Could not load face cascade classifier from {cascade_path}")
+        
+        self.is_candidate_present = False
+        self.multiple_faces_detected = False
+        self.presence_lock = threading.Lock()
+        self.frame_count = 0
+        self.face_detect_interval = 3  # Only detect faces every N frames
+        self.faces_detected = []
+
+    def check_candidate_presence(self):
+        with self.presence_lock:
+            return self.is_candidate_present
+
+    def detect_multiple_faces(self):
+        with self.presence_lock:
+            return len(self.faces_detected) > 1
+
+    def get_face_count(self):
+        with self.presence_lock:
+            return len(self.faces_detected)
+
+    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+        try:
+            self.frame_count += 1
+            img = frame.to_ndarray(format="bgr24")
+            
+            # Only run face detection every N frames to improve performance
+            if self.frame_count % self.face_detect_interval == 0:
+                # Convert to grayscale for faster processing
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                
+                # Detect faces with optimized parameters
+                faces = self.face_cascade.detectMultiScale(
+                    gray,
+                    scaleFactor=1.1,
+                    minNeighbors=4,
+                    minSize=(30, 30),
+                    flags=cv2.CASCADE_SCALE_IMAGE
+                )
+                
+                # Update face detection status
+                with self.presence_lock:
+                    self.faces_detected = faces
+                    self.is_candidate_present = len(faces) > 0
+                    self.multiple_faces_detected = len(faces) > 1
+                
+                # Draw rectangles around detected faces
+                for (x, y, w, h) in faces:
+                    color = (255, 0, 0) if len(faces) == 1 else (0, 0, 255)  # Blue for single face, Red for multiple
+                    cv2.rectangle(img, (x, y), (x+w, y+h), color, 2)
+                    
+                    # Add appropriate label
+                    if len(faces) == 1:
+                        label = 'Candidate Detected'
+                    else:
+                        label = 'Multiple Faces!'
+                    
+                    cv2.putText(img, label, (x, y-10), 
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                
+                # Add warning text if multiple faces detected
+                if len(faces) > 1:
+                    warning_text = "WARNING: Multiple people detected!"
+                    cv2.putText(img, warning_text, (10, 30), 
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            
+            return av.VideoFrame.from_ndarray(img, format="bgr24")
+            
+        except Exception as e:
+            print(f"Error in video processing: {str(e)}")
+            # Return original frame if there's an error
+            return frame
+
+def main():
+    st.set_page_config(
+        page_title="AI vs Human Code Detector",
+        page_icon="🤖",
+        layout="wide"
+    )
+    
+    st.title("🤖 AI vs Human Code Detector")
+    st.markdown("**Advanced ensemble analysis with GitHub repository support**")
+    st.markdown("---")
+    
+    # Tabs for different analysis modes
+    tab1, tab2, tab3 = st.tabs(["📝 Single Code Analysis", "🔗 GitHub Repository Analysis", "� Coding Interview"])
+    
+    with tab1:
+        render_single_code_analysis()
+    
+    with tab2:
+        render_github_repo_analysis()
+    
+    with tab3:
+        render_coding_interview()
+
+if __name__ == "__main__":
+    main()
