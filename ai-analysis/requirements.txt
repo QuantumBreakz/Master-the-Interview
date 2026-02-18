@@ -17,3 +17,4 @@ nltk
 streamlit-ace
 flask
 flask-cors
+xgboost
