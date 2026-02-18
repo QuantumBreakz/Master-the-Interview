@@ -7,6 +7,19 @@ import ModernChatInterface from '../components/ModernChatInterface'
 import ModernSidebar from '../components/ModernSidebar'
 import { Code2, X, Zap, User, RefreshCw, ArrowRight } from 'lucide-react'
 
+const InstructionStep = ({ number, title, desc }) => (
+    <div className="flex items-center gap-4 group">
+        <div className="w-10 h-10 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-white/40 font-mono text-sm group-hover:bg-white/10 group-hover:text-white group-hover:border-white/20 transition-all">
+            {number}
+        </div>
+        <div>
+            <h4 className="font-bold text-white group-hover:text-white transition-colors">{title}</h4>
+            <p className="text-sm text-white/50">{desc}</p>
+        </div>
+    </div>
+);
+
+
 const InterviewPage = () => {
     const navigate = useNavigate()
     const [sessionData, setSessionData] = useState(null)
@@ -1336,17 +1349,7 @@ const InterviewPage = () => {
         )
     }
 
-    const InstructionStep = ({ number, title, desc }) => (
-        <div className="flex items-center gap-4 group">
-            <div className="w-10 h-10 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-white/40 font-mono text-sm group-hover:bg-white/10 group-hover:text-white group-hover:border-white/20 transition-all">
-                {number}
-            </div>
-            <div>
-                <h4 className="font-bold text-white group-hover:text-white transition-colors">{title}</h4>
-                <p className="text-sm text-white/50">{desc}</p>
-            </div>
-        </div>
-    );
+
 
     return (
         <div className="h-[calc(100vh-80px)] overflow-hidden flex flex-col md:flex-row bg-background animate-fade-in relative z-10">
