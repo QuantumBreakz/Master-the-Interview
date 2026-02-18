@@ -1,166 +1,224 @@
-# AI Technical Interviewer Platform
 
-An advanced AI-powered technical interview platform featuring a premium React frontend, Node.js backend, and a dedicated Python AI analysis service. The system conducts real-time technical interviews, provides live coding environments, and generates detailed performance reports using OpenAI's GPT models.
+<br />
+<div align="center">
+  <img src="frontend/public/favicon.svg" alt="Logo" width="80" height="80">
 
-![Dashboard Preview](./frontend/public/dashboard-preview.png)
+  <h1 align="center">AI Technical Interviewer</h1>
 
-## 🚀 Technology Stack
+  <p align="center">
+    The next generation of technical hiring. An AI-powered platform that conducts real-time interviews, analyzes code, and provides actionable feedback.
+    <br />
+    <a href="#demo"><strong>View Demo</strong></a>
+    ·
+    <a href="https://github.com/QuantumBreakz/Master-the-Interview/issues">Report Bug</a>
+    ·
+    <a href="https://github.com/QuantumBreakz/Master-the-Interview/issues">Request Feature</a>
+  </p>
+</div>
 
-- **Frontend**: React, Vite, Tailwind CSS (Premium "Apple-style" UI), Framer Motion, Lucide Icons.
-- **Backend**: Node.js, Express.js, MongoDB (Mongoose).
-- **AI Service**: Python, Flask, OpenAI API, Scikit-learn (for candidate analysis metrics).
+
+<div align="center">
+
+![React](https://img.shields.io/badge/react-%2320232a.svg?style=for-the-badge&logo=react&logoColor=%2361DAFB)
+![TailwindCSS](https://img.shields.io/badge/tailwindcss-%2338B2AC.svg?style=for-the-badge&logo=tailwind-css&logoColor=white)
+![NodeJS](https://img.shields.io/badge/node.js-6DA55F?style=for-the-badge&logo=node.js&logoColor=white)
+![Express.js](https://img.shields.io/badge/express.js-%23404d59.svg?style=for-the-badge&logo=express&logoColor=%2361DAFB)
+![MongoDB](https://img.shields.io/badge/MongoDB-%234ea94b.svg?style=for-the-badge&logo=mongodb&logoColor=white)
+![Python](https://img.shields.io/badge/python-3670A0?style=for-the-badge&logo=python&logoColor=ffdd54)
+![Flask](https://img.shields.io/badge/flask-%23000.svg?style=for-the-badge&logo=flask&logoColor=white)
+![OpenAI](https://img.shields.io/badge/OpenAI-%23412991.svg?style=for-the-badge&logo=openai&logoColor=white)
+
+</div>
+
+<br />
+
+![Dashboard Preview](frontend/public/dashboard-preview.png)
+
+## 📖 Table of Contents
+
+- [About The Project](#-about-the-project)
+- [Key Features](#-key-features)
+- [Architecture & Tech Stack](#-architecture--tech-stack)
+- [Getting Started](#-getting-started)
+  - [Prerequisites](#prerequisites)
+  - [Installation](#installation)
+- [Running the Application](#-running-the-application)
+- [Environment Variables](#-environment-variables)
+- [Project Structure](#-project-structure)
+- [Contributing](#-contributing)
+- [License](#-license)
+- [Contact](#-contact)
 
 ---
 
-## 📋 Prerequisites
+## 💡 About The Project
 
-Before running the application, ensure you have the following installed:
+**AI Technical Interviewer** is a state-of-the-art platform designed to automate and enhance the technical interview process. By leveraging the power of Large Language Models (LLMs), it acts as an intelligent interviewer that can:
 
-1.  **Node.js** (v16+) & **npm**
-2.  **Python** (v3.8+)
-3.  **MongoDB** (Local instance or Atlas URI)
-4.  **OpenAI API Key** (Required for AI analysis features)
+1.  **Conduct Interviews**: Engage candidates in real-time technical discussions.
+2.  **Assess Coding Skills**: Provide a live coding environment with real-time analysis.
+3.  **Evaluate Performance**: Analyze technical accuracy, communication clarity, and problem-solving patterns.
+
+The goal is to provide a fair, consistent, and deep evaluation of candidates while saving countless hours for engineering teams.
 
 ---
 
-## 🛠️ Installation & Setup
+## ✨ Key Features
 
-Follow these steps in order to set up the complete system.
+- **🧠 Advanced AI Analysis**: utilizes GPT-4 to understand context, follow up on answers, and provide deep technical insights.
+- **🎨 Premium UI/UX**: A "True Black" aesthetic inspired by Apple and Linear, featuring glassmorphism, bento-grids, and fluid animations.
+- **⚡ Real-time Performance**: Built on Vite and React for instant feedback and zero latency.
+- **📊 Comprehensive Reports**: Generates detailed PDF reports with score breakdowns for Technical Knowledge, Communication, and Problem Solving.
+- **🔒 Secure & Private**: Candidate data is processed securely with session-based access control.
 
-### 1. Backend Setup (Node.js)
+---
 
-The backend handles user sessions, interview data, and communication with the AI service.
+## 🏗 Architecture & Tech Stack
 
-```bash
-cd backend
+The application is built as a microservices-based architecture to ensure scalability and separation of concerns.
 
-# Install dependencies
-npm install
+### **1. Frontend (Client)**
+- **Framework**: [React](https://reactjs.org/) (v18) + [Vite](https://vitejs.dev/)
+- **Styling**: [Tailwind CSS](https://tailwindcss.com/) with a custom design system.
+- **Icons**: [Lucide React](https://lucide.dev/)
+- **Features**: Route management with React Router, animations with Framer Motion, and state management with React Hooks.
 
-# Create environment file
-# You can copy the example or create one manually
-cp .env.example .env
+### **2. Backend (Server)**
+- **Runtime**: [Node.js](https://nodejs.org/)
+- **Framework**: [Express.js](https://expressjs.com/)
+- **Database**: [MongoDB](https://www.mongodb.com/) (Mongoose ODM)
+- **Role**: Handles API requests, user session management, data persistence, and orchestration between the Frontend and AI Service.
 
-# Configure .env with your details:
-# PORT=3000
-# MONGO_URI=mongodb://localhost:27017/ai-interviewer
-# OPENAI_API_KEY=your_openai_api_key_here
-# AI_ANALYSIS_URL=http://localhost:5001
-# FRONTEND_URL=http://localhost:5173
+### **3. AI Analysis Service (Microservice)**
+- **Runtime**: [Python](https://www.python.org/) (v3.8+)
+- **Framework**: [Flask](https://flask.palletsprojects.com/)
+- **AI Models**: OpenAI (GPT-4/3.5-turbo), Scikit-learn (for custom metrics).
+- **Role**: Dedicated service for heavy-lifting AI tasks, prompt engineering, and generating analysis reports.
 
-# Start the server
-npm start
-```
-*Server will run on `http://localhost:3000`*
+---
 
-### 2. AI Analysis Service (Python)
+## 🚀 Getting Started
 
-This service runs the advanced analytics and ML models for candidate evaluation.
+Follow these instructions to get a local copy up and running.
 
-```bash
-cd ai-analysis
+### Prerequisites
 
-# Create virtual environment
-python3 -m venv venv
+*   **Node.js** (v16 or higher)
+*   **Python** (v3.8 or higher)
+*   **MongoDB** (running locally or a cloud URI)
+*   **OpenAI API Key** (Essential for AI features)
 
-# Activate virtual environment
-# Windows:
-# venv\Scripts\activate
-# Mac/Linux:
-source venv/bin/activate
+### Installation
 
-# Install dependencies
-pip install -r requirements.txt
+1.  **Clone the repo**
+    ```sh
+    git clone https://github.com/QuantumBreakz/Master-the-Interview.git
+    cd Master-the-Interview
+    ```
 
-# Create .env file
-# PORT=5001
-# OPENAI_API_KEY=your_openai_api_key_here
+2.  **Setup the Backend**
+    ```sh
+    cd backend
+    npm install
+    cp .env.example .env
+    # Update .env with your keys (see Environment Variables section)
+    ```
 
-# Run the service
-python api.py
-```
-*AI Service will run on `http://localhost:5001`*
+3.  **Setup the AI Service**
+    ```sh
+    cd ../ai-analysis
+    python -m venv venv
+    source venv/bin/activate  # On Windows: venv\Scripts\activate
+    pip install -r requirements.txt
+    cp .env.example .env
+    ```
 
-### 3. Frontend Setup (React)
-
-The premium user interface for candidates and recruiters.
-
-```bash
-cd frontend
-
-# Install dependencies
-npm install
-
-# Create environment file
-# Create a .env file in the frontend directory:
-# VITE_AI_BACKEND_URL=http://localhost:3000
-# VITE_RECRUITER_BACKEND_URL=http://localhost:3000
-
-# Start development server
-npm run dev
-```
-*Frontend will run on `http://localhost:5173`*
+4.  **Setup the Frontend**
+    ```sh
+    cd ../frontend
+    npm install
+    cp .env.example .env
+    ```
 
 ---
 
 ## 🏃‍♂️ Running the Application
 
-To run the full application, you need **three terminal windows** running concurrently:
+To run the full stack, you will need **3 terminal windows**:
 
-1.  **Terminal 1 (Backend)**:
-    ```bash
-    cd backend && npm start
-    ```
-2.  **Terminal 2 (AI Service)**:
-    ```bash
-    cd ai-analysis && source venv/bin/activate && python api.py
-    ```
-3.  **Terminal 3 (Frontend)**:
-    ```bash
-    cd frontend && npm run dev
-    ```
+**Terminal 1: Backend**
+```sh
+cd backend
+npm start
+```
 
-Open your browser and navigate to `http://localhost:5173` to start using the platform.
+**Terminal 2: AI Service**
+```sh
+cd ai-analysis
+source venv/bin/activate
+python api.py
+```
+
+**Terminal 3: Frontend**
+```sh
+cd frontend
+npm run dev
+```
+
+OPEN: [http://localhost:5173](http://localhost:5173)
 
 ---
 
-## 🔑 Environment Variables Reference
+## 🔑 Environment Variables
 
 ### Backend (`backend/.env`)
 | Variable | Description |
 |----------|-------------|
-| `PORT` | Port for the backend server (default: 3000) |
-| `MONGO_URI` | Connection string for MongoDB |
-| `OPENAI_API_KEY` | Your OpenAI API key |
-| `AI_ANALYSIS_URL` | URL of the Python AI service (default: http://localhost:5001) |
-| `FRONTEND_URL` | URL of the frontend (CORS whitelisting) |
+| `PORT` | Port for the backend server (default: `3000`) |
+| `MONGO_URI` | MongoDB Connection String |
+| `OPENAI_API_KEY` | Your OpenAI API Key |
+| `AI_ANALYSIS_URL` | URL of the AI Service (default: `http://localhost:5001`) |
+| `FRONTEND_URL` | URL of the Frontend (for CORS, default: `http://localhost:5173`) |
 
 ### AI Service (`ai-analysis/.env`)
 | Variable | Description |
 |----------|-------------|
-| `PORT` | Port for the AI service (default: 5001) |
-| `OPENAI_API_KEY` | Your OpenAI API key (for accessing GPT models) |
+| `PORT` | Port for the Flask server (default: `5001`) |
+| `OPENAI_API_KEY` | Your OpenAI API Key |
 
 ### Frontend (`frontend/.env`)
 | Variable | Description |
 |----------|-------------|
-| `VITE_AI_BACKEND_URL` | URL of the Node.js backend |
-| `VITE_RECRUITER_BACKEND_URL` | URL of the Node.js backend (for admin features) |
+| `VITE_AI_BACKEND_URL` | URL of the Node.js Backend (e.g., `http://localhost:3000`) |
 
 ---
 
-## 🐛 Troubleshooting
+## 📂 Project Structure
 
-- **MongoDB Connection Error**: Ensure your local MongoDB instance is running (`mongod`) or your Atlas URI is correct.
-- **OpenAI API Errors**: Verify your API key is correct in both `backend/.env` and `ai-analysis/.env`. Check your billing status/credits.
-- **CORS Issues**: Ensure `FRONTEND_URL` in `backend/.env` matches the URL your frontend is actually running on (e.g., `http://localhost:5173`).
-- **Python Module Errors**: Ensure you have activated the virtual environment (`source venv/bin/activate`) before running `api.py`.
+```text
+/
+├── frontend/             # React Application
+│   ├── src/
+│   │   ├── components/   # Reusable UI components (Bento cards, Glass panels)
+│   │   ├── pages/        # Main application pages (Dashboard, Interview, Results)
+│   │   └── ...
+│   └── ...
+├── backend/              # Node.js API Server
+│   ├── models/           # Mongoose Schemas
+│   ├── routes/           # API Endpoints
+│   └── ...
+├── ai-analysis/          # Python AI Microservice
+│   ├── api.py            # Flask App Entry Point
+│   ├── data/             # Training/Context data
+│   └── ...
+└── README.md             # This file
+```
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please fork the repository and submit a pull request for any improvements or bug fixes.
+Contributions make the open-source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
 
 1.  Fork the Project
 2.  Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
@@ -168,10 +226,14 @@ Contributions are welcome! Please fork the repository and submit a pull request 
 4.  Push to the Branch (`git push origin feature/AmazingFeature`)
 5.  Open a Pull Request
 
+---
+
 ## 📄 License
 
 Distributed under the MIT License. See `LICENSE` for more information.
 
+---
+
 ## 📧 Contact
 
-Project Link: [https://github.com/your-username/ai-technical-interviewer](https://github.com/your-username/ai-technical-interviewer)
+Project Link: [https://github.com/QuantumBreakz/Master-the-Interview](https://github.com/QuantumBreakz/Master-the-Interview)
